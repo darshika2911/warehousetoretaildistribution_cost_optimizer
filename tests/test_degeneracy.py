@@ -140,3 +140,45 @@ def test_reduced_costs_show_optimality():
 ]
 
     assert all(value >= -1e-9 for value in non_basic_reduced_costs)
+
+def test_modi_improves_degenerate_initial_solution():
+        cost = np.array([
+        [5, 1],
+        [1, 5]
+        ], dtype=float)
+
+        supply = np.array([30, 30], dtype=float)
+        demand = np.array([30, 30], dtype=float)
+
+    # NW Corner produces a degenerate solution:
+    #
+    # [30,  0]
+    # [ 0, 30]
+    #
+        initial_alloc = north_west_corner(supply, demand)
+
+        initial_cost = total_cost(cost, initial_alloc)
+
+        assert initial_cost == 300
+
+    # MODI should recognize that the off-diagonal routes
+    # are cheaper and pivot to the optimal solution.
+        solution = modi_method(
+            cost,
+            supply,
+            demand,
+            initial_alloc
+        )
+
+        expected = np.array([
+            [0, 30],
+            [30, 0]
+        ], dtype=float)
+
+        assert np.array_equal(solution, expected)
+
+    # Optimal cost = 30(1) + 30(1) = 60
+        assert total_cost(cost, solution) == 60
+
+    # Confirm that MODI actually improved the initial solution.
+        assert total_cost(cost, solution) < initial_cost
