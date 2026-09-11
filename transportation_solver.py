@@ -338,39 +338,107 @@ def reduced_costs(cost, alloc):
 def modi_method(cost, supply, demand, initial_alloc, max_iter=200, verbose=False):
     """
     Iterate a feasible starting allocation to the cost-minimizing solution
-    using the MODI (u-v) method. `initial_alloc` can come from
-    north_west_corner(), least_cost_method(), or any other feasible plan.
+    using the MODI (u-v) method.
+
+    The basis is maintained explicitly across pivots so that degenerate
+    solutions (including those created by dummy rows/columns) are handled
+    correctly.
     """
+
     m, n = len(supply), len(demand)
     alloc = deepcopy(initial_alloc)
 
+    # Build an initial spanning-tree basis.
+    basic = _complete_basis_for_degeneracy(
+        alloc,
+        cost,
+        m,
+        n
+    )
+
     for iteration in range(max_iter):
-        basic = _complete_basis_for_degeneracy(alloc, cost, m, n)
-        u, v = _compute_uv(cost, basic, m, n)
-        entering = _find_entering_cell(cost, basic, u, v, m, n)
 
+        # Compute MODI potentials using the current basis.
+        u, v = _compute_uv(
+            cost,
+            basic,
+            m,
+            n
+        )
+
+        # Find the most negative reduced-cost non-basic cell.
+        entering = _find_entering_cell(
+            cost,
+            basic,
+            u,
+            v,
+            m,
+            n
+        )
+
+        # No negative reduced cost => optimal.
         if entering is None:
+
             if verbose:
-                print(f"Optimal after {iteration} pivot(s).")
-            break
+                print(
+                    f"Optimal after {iteration} pivot(s)."
+                )
 
-        loop = _find_closed_loop(basic, entering, m, n)
-        # Loop alternates +theta, -theta, +theta, -theta, ... starting at
-        # the entering cell (a "+"). The minus positions cap how much we
-        # can shift around the loop.
+            return alloc
+
+        # Find the closed transportation loop.
+        loop = _find_closed_loop(
+            basic,
+            entering,
+            m,
+            n
+        )
+
+        # Alternating + / - cells.
         minus_cells = loop[1::2]
-        theta = min(alloc[i][j] for (i, j) in minus_cells)
 
+        # Maximum amount that can enter the entering cell.
+        theta = min(
+            alloc[i][j]
+            for (i, j) in minus_cells
+        )
+
+        # Determine which minus cell leaves the basis.
+        leaving_candidates = [
+            cell
+            for cell in minus_cells
+            if alloc[cell[0]][cell[1]] == theta
+        ]
+
+        # Deterministic tie-breaking.
+        leaving = leaving_candidates[0]
+
+        # Add entering cell to the basis.
+        if entering not in basic:
+            basic.append(entering)
+
+        # Perform the pivot.
         for idx, (i, j) in enumerate(loop):
-            alloc[i][j] += theta if idx % 2 == 0 else -theta
+
+            if idx % 2 == 0:
+                alloc[i][j] += theta
+            else:
+                alloc[i][j] -= theta
+
+        # Remove the leaving cell from the basis.
+        if leaving != entering and leaving in basic:
+            basic.remove(leaving)
 
         if verbose:
             print(
-                f"Iteration {iteration}: entering {entering}, theta={theta}, "
+                f"Iteration {iteration}: "
+                f"entering {entering}, "
+                f"leaving {leaving}, "
+                f"theta={theta}, "
                 f"cost={total_cost(cost, alloc)}"
             )
-    else:
-        raise RuntimeError("MODI did not converge within max_iter iterations.")
 
-    return alloc
+    raise RuntimeError(
+        "MODI did not converge within max_iter iterations."
+    )
     
