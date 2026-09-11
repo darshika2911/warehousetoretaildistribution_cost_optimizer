@@ -34,7 +34,12 @@ def test_nw_corner_produces_degenerate_solution():
     )
 
     # Only two cells contain positive allocations.
-    positive_cells = np.sum(alloc > 0)
+    positive_cells = sum(
+    1
+    for row in alloc
+    for value in row
+    if value > 0
+)
 
     assert positive_cells == 2
 
@@ -128,10 +133,10 @@ def test_reduced_costs_show_optimality():
 
     # No negative reduced cost should exist.
     non_basic_reduced_costs = [
-        rc[i, j]
-        for i in range(2)
-        for j in range(2)
-        if alloc[i, j] == 0
-    ]
+    rc[i][j]
+    for i in range(2)
+    for j in range(2)
+    if alloc[i][j] == 0
+]
 
     assert all(value >= -1e-9 for value in non_basic_reduced_costs)
