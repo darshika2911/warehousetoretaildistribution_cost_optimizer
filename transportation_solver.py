@@ -48,8 +48,49 @@ def validate_balanced(supply, demand):
         raise ValueError(
             f"Unbalanced problem: total supply ({sum(supply)}) != "
             f"total demand ({sum(demand)}). Add a dummy source/destination "
-            f"with zero cost before solving."
+            f"with zero cost before solving, or call balance_problem()."
         )
+
+
+def balance_problem(cost, supply, demand, dummy_cost=0):
+    """
+    Real distribution networks are almost never exactly balanced --
+    either total capacity exceeds total demand, or total demand exceeds
+    what the network can currently supply. Rather than raising an error,
+    this inserts a zero-cost dummy source or destination so the problem
+    can still be solved with the standard algorithms.
+
+    A dummy destination absorbs *unused* supply (excess capacity that
+    ships nowhere); a dummy source covers *unmet* demand (a shortfall
+    that a real plan would have to backfill from an outside supplier,
+    expedited freight, etc.). Either way, any allocation touching the
+    dummy row/column represents a gap in the real network, not an
+    actual shipment -- report on it accordingly.
+
+    Returns (cost2, supply2, demand2, info) where info describes what,
+    if anything, was added. If the problem was already balanced,
+    cost2/supply2/demand2 are unchanged copies and info["added"] is None.
+    """
+    total_supply, total_demand = sum(supply), sum(demand)
+    cost2 = [row[:] for row in cost]
+    supply2, demand2 = list(supply), list(demand)
+
+    if total_supply == total_demand:
+        return cost2, supply2, demand2, {"added": None}
+
+    if total_supply > total_demand:
+        gap = total_supply - total_demand
+        demand2.append(gap)
+        for row in cost2:
+            row.append(dummy_cost)
+        info = {"added": "dummy_destination", "index": len(demand2) - 1, "amount": gap}
+    else:
+        gap = total_demand - total_supply
+        supply2.append(gap)
+        cost2.append([dummy_cost] * len(demand2))
+        info = {"added": "dummy_source", "index": len(supply2) - 1, "amount": gap}
+
+    return cost2, supply2, demand2, info
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +291,50 @@ def _find_closed_loop(basic, entering, m, n):
     return result[:-1]  # drop the repeated starting cell
 
 
+def compute_dual_values(cost, alloc):
+    """
+    Recover the MODI dual values (u[i] per source, v[j] per destination)
+    for a *final*, optimal allocation. These are the classical
+    "shadow prices" of the transportation LP: u[i] + v[j] is what the
+    solver believes route (i, j) "should" cost given everything else in
+    the plan, and u[0] is pinned to 0 as the reference point (duals are
+    only meaningful up to a constant shift -- interpret differences
+    between sources/destinations, not the raw numbers).
+    """
+    m, n = len(alloc), len(alloc[0])
+    basic = _complete_basis_for_degeneracy(alloc, cost, m, n)
+    return _compute_uv(cost, basic, m, n)
+
+
+def reduced_costs(cost, alloc):
+    """
+    For every non-basic (unused) route, the reduced cost is how much
+    total cost would change per unit if that route were used instead of
+    the current plan -- i.e. cost[i][j] - (u[i] + v[j]). At optimality
+    every reduced cost is >= 0, meaning no unused route can improve the
+    plan. The size of the smallest positive reduced costs tells you how
+    close an alternative route is to becoming worthwhile (e.g. if a
+    route's reduced cost is 1, a $1/unit freight-rate change would flip
+    the optimal plan to use it).
+
+    Returns a matrix the same shape as `cost`; basic (used) cells are
+    reported as 0 by convention.
+    """
+    m, n = len(alloc), len(alloc[0])
+    u, v = compute_dual_values(cost, alloc)
+    basic_set = set(_basic_cells(alloc, m, n))
+    result = [[0] * n for _ in range(m)]
+    for i in range(m):
+        for j in range(n):
+            if (i, j) in basic_set:
+                continue
+            if u[i] is None or v[j] is None:
+                result[i][j] = None  # unreachable in a degenerate basis
+            else:
+                result[i][j] = cost[i][j] - (u[i] + v[j])
+    return result
+
+
 def modi_method(cost, supply, demand, initial_alloc, max_iter=200, verbose=False):
     """
     Iterate a feasible starting allocation to the cost-minimizing solution
@@ -288,3 +373,4 @@ def modi_method(cost, supply, demand, initial_alloc, max_iter=200, verbose=False
         raise RuntimeError("MODI did not converge within max_iter iterations.")
 
     return alloc
+    
